@@ -1,0 +1,11 @@
+.build/
+.swiftpm/
+*.o
+*.d
+*.dia
+DerivedData/
+*.xcuserstate
+xcuserdata/
+**/xcuserdata/
+*.xcworkspace/xcuserdata/
+DemoApp/**/*.xcuserstate

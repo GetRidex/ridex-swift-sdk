@@ -42,7 +42,7 @@ Or add it directly to your `Package.swift`:
 
 ```swift
 dependencies: [
-    .package(url: "https://github.com/ridex/ridex-swift-sdk", from: "1.0.0")
+    .package(url: "https://github.com/GetRidex/ridex-swift-sdk", from: "1.0.0")
 ],
 targets: [
     .target(name: "YourApp", dependencies: ["RidexSwiftSDK"])

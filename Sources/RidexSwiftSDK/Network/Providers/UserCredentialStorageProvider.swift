@@ -11,8 +11,6 @@
 
 import Foundation
 
-// MARK: - HTTP Header Name
-
 struct HTTPHeaderName: RawRepresentable, Equatable, Hashable {
     let rawValue: String
     init(rawValue: String) { self.rawValue = rawValue }
@@ -23,8 +21,6 @@ extension HTTPHeaderName {
     static let contentType   = HTTPHeaderName(rawValue: "Content-Type")
     static let userAgent     = HTTPHeaderName(rawValue: "User-Agent")
 }
-
-// MARK: - URLRequest helpers
 
 extension URLRequest {
     init(_ method: HTTPMethod, url: URL, body: Data? = nil) {

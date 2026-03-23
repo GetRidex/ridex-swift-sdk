@@ -11,21 +11,33 @@
 
 import Foundation
 
-/// Attaches the Ridex gateway key and standard headers to every outgoing request.
 struct RidexRequestAuthorizer {
 
     private let gatewayKey: String
+    let attestManager: AttestManager?
 
-    init(gatewayKey: String) {
+    init(gatewayKey: String, attestManager: AttestManager? = nil) {
         self.gatewayKey = gatewayKey
+        self.attestManager = attestManager
     }
 
-    /// Returns a copy of the request with `Authorization` and `User-Agent` attached.
-    func authorize(_ request: URLRequest) -> URLRequest {
+    func authorize(_ request: URLRequest) async -> URLRequest {
         var r = request
         r.setValue("Bearer \(gatewayKey)", forHTTPHeaderField: HTTPHeaderName.authorization.rawValue)
         r.setValue("ridex-swift/1.0.0", forHTTPHeaderField: HTTPHeaderName.userAgent.rawValue)
         r.setValue("application/json", forHTTPHeaderField: HTTPHeaderName.contentType.rawValue)
+
+        for (key, value) in DeviceInfo.headers {
+            r.setValue(value, forHTTPHeaderField: key)
+        }
+
+        if let attestManager, let body = request.httpBody {
+            do {
+                let headers = try await attestManager.assertionHeaders(for: body)
+                for (key, value) in headers { r.setValue(value, forHTTPHeaderField: key) }
+            } catch {}
+        }
+
         return r
     }
 }

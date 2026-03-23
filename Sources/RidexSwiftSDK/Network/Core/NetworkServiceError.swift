@@ -30,9 +30,11 @@ public enum RidexNetworkError: Error {
     case timedOut
     /// The request was cancelled.
     case cancelled
+    /// App Attest is required but not supported on this device.
+    case attestNotSupported
+    /// The server rejected the App Attest assertion (expired key, revoked device, or needs re-attestation).
+    case attestRejected(detail: String? = nil)
 }
-
-// MARK: - Equatable
 
 extension RidexNetworkError: Equatable {
     public static func == (lhs: RidexNetworkError, rhs: RidexNetworkError) -> Bool {
@@ -48,13 +50,15 @@ extension RidexNetworkError: Equatable {
             return true
         case (.serverError(let a, _), .serverError(let b, _)):
             return a == b
+        case (.attestNotSupported, .attestNotSupported):
+            return true
+        case (.attestRejected, .attestRejected):
+            return true
         default:
             return false
         }
     }
 }
-
-// MARK: - LocalizedError
 
 extension RidexNetworkError: LocalizedError {
 
@@ -87,6 +91,15 @@ extension RidexNetworkError: LocalizedError {
 
         case .cancelled:
             return "[Ridex] Request cancelled."
+
+        case .attestNotSupported:
+            return "[Ridex] App Attest is required but not supported on this device."
+
+        case .attestRejected(let detail):
+            if let detail {
+                return "[Ridex] App Attest verification failed: \(detail)"
+            }
+            return "[Ridex] App Attest verification failed."
         }
     }
 
@@ -119,6 +132,15 @@ extension RidexNetworkError: LocalizedError {
 
         case .cancelled:
             return "The request was cancelled."
+
+        case .attestNotSupported:
+            return "This key requires App Attest but the device does not support it."
+
+        case .attestRejected(let detail):
+            if let detail {
+                return "The device's attestation was rejected by the server: \(detail)"
+            }
+            return "The device's attestation was rejected by the server."
         }
     }
 
@@ -153,10 +175,15 @@ extension RidexNetworkError: LocalizedError {
 
         case .cancelled:
             return "No action required — this is expected when a user navigates away or a Task is explicitly cancelled."
+
+        case .attestNotSupported:
+            return "App Attest requires a real Apple device with iOS 14+. Simulators and older devices are not supported. " +
+                   "Use a Development key (rdx_test_) for simulator testing."
+
+        case .attestRejected:
+            return "The SDK will automatically re-attest on the next request. If this persists, check the server error detail or verify the device has not been revoked in the Ridex dashboard."
         }
     }
-
-    // MARK: - Per-status helpers
 
     private static func title(for code: Int) -> String {
         switch code {

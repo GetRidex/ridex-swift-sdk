@@ -11,8 +11,6 @@
 
 import Foundation
 
-// MARK: - HTTP Session
-
 protocol RidexHTTPSession: Sendable {
     func data(for request: URLRequest) async throws -> (Data, URLResponse)
 }
@@ -23,13 +21,9 @@ extension URLSession: RidexHTTPSession {
     }
 }
 
-// MARK: - HTTP Method
-
 enum HTTPMethod: String {
     case post = "POST"
 }
-
-// MARK: - Network Response
 
 protocol RidexNetworkResponse {
     init(response: HTTPURLResponse, data: Data?) throws
@@ -63,6 +57,12 @@ extension RidexDecodableResponse {
             if response.statusCode == 403, body?.isBundleIdMismatch == true {
                 throw RidexNetworkError.bundleIdMismatch
             }
+            if response.statusCode == 403, body?.isDeviceRevoked == true {
+                throw RidexNetworkError.serverError(statusCode: 403, message: "This device has been revoked.")
+            }
+            if response.statusCode == 403, body?.isAttestError == true {
+                throw RidexNetworkError.attestRejected(detail: body?.message)
+            }
             throw RidexNetworkError.serverError(statusCode: response.statusCode, message: body?.message)
         default:
             throw RidexNetworkError.serverError(statusCode: response.statusCode, message: nil)
@@ -72,28 +72,37 @@ extension RidexDecodableResponse {
 
 extension Array: RidexNetworkResponse, RidexDecodableResponse where Element: Decodable {}
 
-// MARK: - Internal error body
-
-/// Handles two error shapes the gateway may return:
-///   OAI format    – { "error": { "message": "...", "type": "...", "code": "..." } }
-///   Simple format – { "error": "bundle_id_mismatch", "message": "..." }
-private struct GatewayErrorBody: Decodable {
+struct GatewayErrorBody: Decodable {
     let message: String?
+    let code: String?
     let isBundleIdMismatch: Bool
 
+    var isAttestError: Bool {
+        switch code {
+        case "attest_required", "device_unknown", "invalid_assertion":
+            return true
+        default:
+            return false
+        }
+    }
+
+    var isDeviceRevoked: Bool {
+        code == "device_revoked"
+    }
+
     private enum CodingKeys: String, CodingKey { case error, message }
-    private struct OAIError: Decodable { let message: String? }
+    private struct OAIError: Decodable { let message: String?; let code: String? }
 
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
-        // Try OAI nested object: { "error": { "message": "..." } }
         if let nested = try? c.decode(OAIError.self, forKey: .error) {
             message            = nested.message
+            code               = nested.code
             isBundleIdMismatch = false
         } else {
-            // Simple format: { "error": "bundle_id_mismatch", "message": "..." }
             let errorCode      = try? c.decode(String.self, forKey: .error)
             message            = try? c.decode(String.self, forKey: .message)
+            code               = errorCode
             isBundleIdMismatch = errorCode == "bundle_id_mismatch"
         }
     }

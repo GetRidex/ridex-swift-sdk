@@ -11,11 +11,11 @@
 
 import Foundation
 
-/// The Ridex network layer. Executes authenticated HTTP requests using structured concurrency.
 actor RidexNetworkService {
 
     private let session:    RidexHTTPSession
     private let authorizer: RidexRequestAuthorizer
+    private var attestReady = false
 
     private static let retryableStatusCodes: Set<Int> = [429, 503]
 
@@ -27,14 +27,39 @@ actor RidexNetworkService {
         self.authorizer = authorizer
     }
 
-    // MARK: – Load
-
     func load<R: RidexDecodableResponse>(_ type: R.Type = R.self, request: URLRequest) async throws -> R {
-        let authorized = authorizer.authorize(request)
-        return try await execute(authorized, attempt: 1)
-    }
+        if !attestReady, let attestManager = authorizer.attestManager {
+            do {
+                try await attestManager.ensureAttested()
+                attestReady = true
+            } catch {}
+        }
 
-    // MARK: – Private
+        let authorized = await authorizer.authorize(request)
+
+        do {
+            return try await execute(authorized, attempt: 1)
+        } catch let error as RidexNetworkError where error == .attestRejected() {
+            guard let attestManager = authorizer.attestManager else { throw error }
+
+            await attestManager.reset()
+            attestReady = false
+
+            do {
+                try await attestManager.ensureAttested()
+                attestReady = true
+            } catch let attestError {
+                let detail = (attestError as? RidexNetworkError).flatMap { e -> String? in
+                    if case .serverError(_, let msg) = e { return msg }
+                    return nil
+                } ?? attestError.localizedDescription
+                throw RidexNetworkError.attestRejected(detail: detail)
+            }
+
+            let retryAuthorized = await authorizer.authorize(request)
+            return try await execute(retryAuthorized, attempt: 1)
+        }
+    }
 
     private func execute<R: RidexDecodableResponse>(_ request: URLRequest, attempt: Int) async throws -> R {
         let data: Data
@@ -50,7 +75,8 @@ actor RidexNetworkService {
             throw RidexNetworkError.invalidResponse
         }
 
-        if attempt == 1, Self.retryableStatusCodes.contains(http.statusCode) {
+        let hasAttest = request.value(forHTTPHeaderField: "X-Ridex-Attest-Assertion") != nil
+        if attempt == 1, !hasAttest, Self.retryableStatusCodes.contains(http.statusCode) {
             let delay = retryDelay(from: http)
             try await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
             return try await execute(request, attempt: 2)

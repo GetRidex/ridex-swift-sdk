@@ -77,11 +77,7 @@ import Foundation
 /// ```
 public enum Ridex {
 
-    // MARK: - Storage
-
     @RidexActor private static var _client: RidexClient?
-
-    // MARK: - Configure
 
     /// Configures the shared Ridex client with your gateway key.
     ///
@@ -110,8 +106,6 @@ public enum Ridex {
         Task { @RidexActor in _client = client }
     }
 
-    // MARK: - Shared
-
     /// The shared ``RidexClient`` instance configured by ``configure(_:)``.
     ///
     /// Use this property when you need direct access to the client — for example,
@@ -137,8 +131,6 @@ public enum Ridex {
         }
         return client
     }
-
-    // MARK: - Prompt
 
     /// Sends a message to the Ridex gateway and returns the assistant's reply.
     ///

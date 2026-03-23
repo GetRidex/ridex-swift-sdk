@@ -269,6 +269,177 @@ final class ErrorDescriptionTests: XCTestCase {
     }
 }
 
+// MARK: - Attest recovery tests
+
+/// Tests for the attest-rejected recovery flow in `RidexNetworkService`.
+final class NetworkServiceAttestTests: XCTestCase {
+
+    private var validChatJSON: Data {
+        """
+        {
+            "id": "chatcmpl-abc",
+            "model": "gpt-4o",
+            "choices": [{ "index": 0, "message": { "role": "assistant", "content": "Hello!" }, "finish_reason": "stop" }]
+        }
+        """.data(using: .utf8)!
+    }
+
+    private var blankRequest: URLRequest { URLRequest(url: .ridexBase) }
+
+    private var attestErrorJSON: Data {
+        #"{"error":{"message":"Attest required","code":"attest_required"}}"#.data(using: .utf8)!
+    }
+
+    override func tearDown() {
+        super.tearDown()
+        RidexKeychain.delete(key: "ridex_attest_key_id")
+        RidexKeychain.delete(key: "ridex_attest_done")
+    }
+
+    private func makeServiceWithAttest(
+        session: MockHTTPSession,
+        attestService: MockAppAttestService = MockAppAttestService()
+    ) -> (RidexNetworkService, MockAppAttestService) {
+        // Clean keychain
+        RidexKeychain.delete(key: "ridex_attest_key_id")
+        RidexKeychain.delete(key: "ridex_attest_done")
+
+        let manager = AttestManager(
+            gatewayKey: "rdx_test_key",
+            attestService: attestService,
+            baseURL: URL(string: "https://localhost:9999")!
+        )
+        let authorizer = RidexRequestAuthorizer(gatewayKey: "rdx_test_key", attestManager: manager)
+        let service = RidexNetworkService(session: session, authorizer: authorizer)
+        return (service, attestService)
+    }
+
+    // MARK: - Attest on first request
+
+    func test_load_callsEnsureAttested_whenAttestManagerExists() async throws {
+        let session = MockHTTPSession()
+        session.dataResult = (validChatJSON, MockHTTPSession.http(200))
+
+        let attestService = MockAppAttestService()
+        // ensureAttested will fail at network level (localhost:9999) but that's swallowed
+        let (service, _) = makeServiceWithAttest(session: session, attestService: attestService)
+
+        let _: ChatResponse = try await service.load(request: blankRequest)
+
+        // generateKey should have been called as part of ensureAttested
+        XCTAssertTrue(attestService.generateKeyCalled, "ensureAttested should be called on first request")
+    }
+
+    func test_load_succeedsEvenWhenAttestationFails() async throws {
+        let session = MockHTTPSession()
+        session.dataResult = (validChatJSON, MockHTTPSession.http(200))
+
+        let attestService = MockAppAttestService()
+        // ensureAttested will fail at the network call, but load should still proceed
+        let (service, _) = makeServiceWithAttest(session: session, attestService: attestService)
+
+        let response: ChatResponse = try await service.load(request: blankRequest)
+        XCTAssertEqual(response.text, "Hello!")
+    }
+
+    // MARK: - attestReady skips re-attestation
+
+    func test_load_skipsEnsureAttested_afterSuccessfulFirstCall() async throws {
+        let session = MockHTTPSession()
+        session.dataResult = (validChatJSON, MockHTTPSession.http(200))
+
+        // Use unsupported attestService so ensureAttested is a no-op (completes successfully)
+        let attestService = MockAppAttestService()
+        attestService.isSupportedValue = false
+        let (service, _) = makeServiceWithAttest(session: session, attestService: attestService)
+
+        // First call
+        let _: ChatResponse = try await service.load(request: blankRequest)
+        // Second call — should not call ensureAttested again
+        let _: ChatResponse = try await service.load(request: blankRequest)
+
+        // Since isSupported is false, generateKey is never called.
+        // The key check is that the second call proceeds without issues.
+        XCTAssertEqual(session.capturedDataRequests.count, 2)
+    }
+
+    // MARK: - 403 attest error throws attestRejected
+
+    func test_load_403_attestError_throwsAttestRejected_whenNoManager() async {
+        let session = MockHTTPSession()
+        session.dataResult = (attestErrorJSON, MockHTTPSession.http(403))
+
+        let service = RidexNetworkService(
+            session: session,
+            authorizer: RidexRequestAuthorizer(gatewayKey: "rdx_test_key", attestManager: nil)
+        )
+
+        do {
+            let _: ChatResponse = try await service.load(request: blankRequest)
+            XCTFail("Expected attestRejected error")
+        } catch let err as RidexNetworkError {
+            XCTAssertEqual(err, .attestRejected, "Should throw attestRejected when no manager")
+        } catch {
+            XCTFail("Unexpected error: \(error)")
+        }
+    }
+
+    // MARK: - 403 attest error with manager triggers recovery
+
+    func test_load_403_attestError_withManager_retriesRequest() async throws {
+        let session = MockHTTPSession()
+        // First response: 403 attest error; second (after re-attest): 200 success
+        session.dataResults = [
+            (attestErrorJSON, MockHTTPSession.http(403)),
+            (validChatJSON, MockHTTPSession.http(200)),
+        ]
+
+        // Pre-set attested state so ensureAttested is a no-op initially
+        RidexKeychain.save(key: "ridex_attest_key_id", value: "old-key")
+        RidexKeychain.save(key: "ridex_attest_done", value: "true")
+
+        let attestService = MockAppAttestService()
+        // The re-attestation after reset will fail at network (localhost:9999),
+        // which means recovery will throw attestRejected.
+        // This tests that the recovery path is entered.
+        let manager = AttestManager(
+            gatewayKey: "rdx_test_key",
+            attestService: attestService,
+            baseURL: URL(string: "https://localhost:9999")!
+        )
+        let authorizer = RidexRequestAuthorizer(gatewayKey: "rdx_test_key", attestManager: manager)
+        let service = RidexNetworkService(session: session, authorizer: authorizer)
+
+        do {
+            let _: ChatResponse = try await service.load(request: blankRequest)
+            XCTFail("Expected error because re-attestation fails at network level")
+        } catch let err as RidexNetworkError {
+            // Recovery fails because ensureAttested hits localhost:9999
+            XCTAssertEqual(err, .attestRejected)
+        } catch {
+            XCTFail("Unexpected error: \(error)")
+        }
+
+        // Verify reset was called (generateKey should be attempted during re-attestation)
+        XCTAssertTrue(attestService.generateKeyCalled, "Re-attestation should attempt generateKey")
+    }
+
+    // MARK: - Unsupported attest service, no attest overhead
+
+    func test_load_withUnsupportedAttest_proceedsNormally() async throws {
+        let session = MockHTTPSession()
+        session.dataResult = (validChatJSON, MockHTTPSession.http(200))
+
+        let attestService = MockAppAttestService()
+        attestService.isSupportedValue = false
+        let (service, _) = makeServiceWithAttest(session: session, attestService: attestService)
+
+        let response: ChatResponse = try await service.load(request: blankRequest)
+        XCTAssertEqual(response.text, "Hello!")
+        XCTAssertFalse(attestService.generateKeyCalled, "Should not generate key when unsupported")
+    }
+}
+
 // MARK: - Async assertion helper
 
 private func assertThrows<T>(

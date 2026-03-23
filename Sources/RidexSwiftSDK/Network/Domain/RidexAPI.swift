@@ -17,8 +17,6 @@ enum RidexAPI {
     /// Sends a message and returns the full text response.
     case chat
 
-    // MARK: - Endpoint metadata
-
     var path: String {
         switch self {
         case .chat: return RidexGateway.Route.chatCompletions

@@ -9,3 +9,7 @@ xcuserdata/
 **/xcuserdata/
 *.xcworkspace/xcuserdata/
 DemoApp/**/*.xcuserstate
+
+# Claude
+.claude/
+CLAUDE.md

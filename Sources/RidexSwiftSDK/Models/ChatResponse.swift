@@ -15,8 +15,6 @@ struct ChatResponse {
     let text: String
 }
 
-// MARK: - Decodable (private internals)
-
 extension ChatResponse: Decodable {
 
     private struct Choice: Decodable {

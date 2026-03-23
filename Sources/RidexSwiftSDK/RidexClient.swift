@@ -49,18 +49,12 @@ import Foundation
 /// Concurrent calls to ``prompt(_:context:featureTag:userTag:)`` are fully supported.
 public final class RidexClient: Sendable {
 
-    // MARK: - Internal state
-
     let env:            Environment
     let networkService: RidexNetworkService
     let requestFactory: RidexRequestFactory
 
-    // MARK: - Constants
-
     private static let maxMessageLength = 32_000
     private static let maxTagLength = 128
-
-    // MARK: - Init
 
     /// Creates a new Ridex client with the given gateway key.
     ///
@@ -82,22 +76,20 @@ public final class RidexClient: Sendable {
         sessionConfig.timeoutIntervalForRequest  = 60
         sessionConfig.timeoutIntervalForResource = 120
 
+        let attestManager = AttestManager(gatewayKey: apiKey)
+
         self.networkService = RidexNetworkService(
             session:    URLSession(configuration: sessionConfig),
-            authorizer: RidexRequestAuthorizer(gatewayKey: apiKey)
+            authorizer: RidexRequestAuthorizer(gatewayKey: apiKey, attestManager: attestManager)
         )
         self.requestFactory = RidexRequestFactory()
     }
-
-    // MARK: - Init (testable)
 
     init(apiKey: String, networkService: RidexNetworkService) {
         self.env            = Environment.inferred(from: apiKey)
         self.networkService = networkService
         self.requestFactory = RidexRequestFactory()
     }
-
-    // MARK: - Internal request builder
 
     func buildRequest(
         api:        RidexAPI,
@@ -114,8 +106,6 @@ public final class RidexClient: Sendable {
         if let uid = userTag.flatMap(sanitized)    { request.setValue(uid, forHTTPHeaderField: "X-Ridex-User-ID") }
         return request
     }
-
-    // MARK: - Prompt
 
     /// Sends a message to the Ridex gateway and returns the assistant's reply.
     ///
@@ -187,8 +177,6 @@ public final class RidexClient: Sendable {
                                        featureTag: featureTag, userTag: userTag)
         return try await networkService.load(ChatResponse.self, request: request).text
     }
-
-    // MARK: - Private helpers
 
     private func sanitized(_ tag: String) -> String? {
         let cleaned = tag.unicodeScalars
